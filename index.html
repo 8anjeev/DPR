@@ -124,7 +124,7 @@ const MAX_PHOTOS=8;
 // ── App State ────────────────────────────────────────────────
 const state={
   view:'dashboard',
-  company:{companyName:'',companyAddress:'',engineerName:''},
+  company:{companyName:'',companyAddress:'',engineerName:'',signature:''},
   projects:[],
   date:todayStr(),reports:[],allDates:[],
   activeProject:null,activeReport:null,
@@ -132,7 +132,7 @@ const state={
   settingsView:'main',
   editingProject:null,
   projectForm:{name:'',address:''},
-  companyForm:{companyName:'',companyAddress:'',engineerName:''},
+  companyForm:{companyName:'',companyAddress:'',engineerName:'',signature:''},
 };
 let formState=null;
 let confirmTimer=null;
@@ -390,9 +390,17 @@ function viewSettings(){
             <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Company Address</label>
             <input id="inp_caddr" value="${esc(companyForm.companyAddress)}" placeholder="e.g. Margao, Goa" oninput="state.companyForm.companyAddress=this.value" style="${iStyle}">
           </div>
-          <div style="margin-bottom:20px">
+          <div style="margin-bottom:18px">
             <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Engineer Name</label>
             <input id="inp_ename" value="${esc(companyForm.engineerName)}" placeholder="e.g. Sanjeev" oninput="state.companyForm.engineerName=this.value" style="${iStyle}">
+          </div>
+          <div style="margin-bottom:20px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Site Engineer E-Signature</label>
+            <div style="font-size:11px;color:${C.fog};margin-bottom:7px">Draw your signature below — it's placed once at the end of every printed report.</div>
+            <canvas id="sigCanvas" style="width:100%;height:120px;border:1.5px dashed ${C.border};border-radius:10px;background:${C.snow};touch-action:none;display:block"></canvas>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button onclick="clearSignature()" style="flex:1;padding:9px;border-radius:9px;border:none;background:${C.cloud};color:${C.navy};font-weight:700;font-size:12.5px;cursor:pointer">Clear</button>
+            </div>
           </div>
           <button onclick="saveCompany()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:12px;border:none;font-weight:700;font-size:15px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 3px 12px ${C.navy}40;letter-spacing:.3px">
             ${IC.check} Save Company Info
@@ -440,6 +448,10 @@ function viewSettings(){
             <div style="font-size:16px;font-weight:800;color:${C.ink}">${esc(company.companyName||'—')}</div>
             ${company.companyAddress?`<div style="font-size:13px;color:${C.slate};margin-top:2px">${esc(company.companyAddress)}</div>`:''}
             <div style="font-size:12.5px;color:${C.fog};margin-top:4px">Engineer: ${esc(company.engineerName||'—')}</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+              <span style="font-size:11.5px;color:${company.signature?C.mint:C.fog};font-weight:700">${company.signature?'✓ E-signature added':'No e-signature added'}</span>
+              ${company.signature?`<img src="${company.signature}" style="height:24px;border-bottom:1px solid ${C.border}">`:''}
+            </div>
           </div>`
           :`<div style="font-size:13px;color:${C.fog};margin-bottom:12px;font-style:italic">No company info saved yet — this appears on every printed report</div>`}
         <button onclick="editCompany()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:10px;border:none;font-weight:700;font-size:13px;cursor:pointer;background:${C.cloud};color:${C.navy}">
@@ -623,9 +635,9 @@ function printHeaderHTML(date,co){
 
 function printSiteSectionHTML(project,report){
   let html=`<div style="margin-bottom:14px;page-break-inside:avoid">`;
-  html+=`<div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);border-radius:8px;padding:7px 12px;margin-bottom:8px">
-    <div style="font-size:13.5px;font-weight:800;color:#fff">${esc(project.name)}</div>
-    ${project.address?`<div style="font-size:10.5px;color:rgba(255,255,255,.78)">${esc(project.address)}</div>`:''}
+  html+=`<div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);border-radius:7px;padding:5px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+    <div style="font-size:13px;font-weight:800;color:#fff;white-space:nowrap">${esc(project.name)}</div>
+    ${project.address?`<div style="font-size:10.5px;color:rgba(255,255,255,.8);text-align:right">${esc(project.address)}</div>`:''}
   </div>`;
 
   if(!report){
@@ -677,14 +689,14 @@ function buildPrintBody(date,items){
   const co=state.company;
   const sections=items.map(it=>printSiteSectionHTML(it.project,it.report))
     .join(`<div style="height:1px;background:${C.border};margin:0 0 14px"></div>`);
-  const signature=`<div style="margin-top:4px;padding-top:14px;border-top:2px solid ${C.border};display:flex;justify-content:space-around;page-break-inside:avoid">
-    ${['Site Engineer','Client','Site Incharge'].map(role=>`<div style="text-align:center;flex:1"><div style="height:32px;border-bottom:1.5px solid ${C.slate};margin:0 16px 5px"></div><div style="font-size:10.5px;font-weight:700;color:${C.slate}">${role}</div></div>`).join('')}
+  const signature=`<div style="margin-top:16px;page-break-inside:avoid">
+    ${co.signature?`<img src="${co.signature}" style="height:46px;display:block;margin-bottom:3px">`:''}
+    <div style="font-size:11px;font-weight:700;color:${C.slate}">Site Engineer</div>
   </div>`;
   return `<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:${C.ink};max-width:900px;margin:0 auto">
     ${printHeaderHTML(date,co)}
     ${sections}
     ${signature}
-    <div style="text-align:center;margin-top:12px;font-size:9.5px;color:${C.fog}">Generated by Site Reports App</div>
   </div>`;
 }
 
@@ -767,6 +779,9 @@ function render(){
   }
   document.getElementById('app').innerHTML=html;
   window.scrollTo(0,0);
+  if(state.view==='settings'&&state.settingsView==='editCompany'){
+    requestAnimationFrame(initSignaturePad);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -825,7 +840,7 @@ function rmRow(sec,rid){
 function setWeather(w){formState.weather=w;state.view='form';render();}
 
 function editCompany(){
-  state.companyForm={companyName:state.company.companyName||'',companyAddress:state.company.companyAddress||'',engineerName:state.company.engineerName||''};
+  state.companyForm={companyName:state.company.companyName||'',companyAddress:state.company.companyAddress||'',engineerName:state.company.engineerName||'',signature:state.company.signature||''};
   state.settingsView='editCompany';render();
 }
 async function saveCompany(){
@@ -836,11 +851,59 @@ async function saveCompany(){
   const companyAddress=(ca?ca.value:state.companyForm.companyAddress).trim();
   const engineerName=(en?en.value:state.companyForm.engineerName).trim();
   if(!companyName){alert('Please enter a company name.');return;}
-  const obj={companyName,companyAddress,engineerName};
+  const obj={companyName,companyAddress,engineerName,signature:state.companyForm.signature||''};
   await DB.settings.save(obj);
   state.company=obj;
   state.settingsView='main';
   render();
+}
+
+// ── E-signature pad (canvas) ────────────────────────────────────
+function initSignaturePad(){
+  const canvas=document.getElementById('sigCanvas');
+  if(!canvas)return;
+  const rect=canvas.getBoundingClientRect();
+  const dpr=window.devicePixelRatio||1;
+  canvas.width=Math.max(1,rect.width)*dpr;
+  canvas.height=Math.max(1,rect.height)*dpr;
+  const ctx=canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.strokeStyle=C.ink;
+  ctx.lineWidth=2.2;
+  ctx.lineCap='round';
+  ctx.lineJoin='round';
+
+  if(state.companyForm.signature){
+    const img=new Image();
+    img.onload=()=>{ try{ctx.drawImage(img,0,0,rect.width,rect.height);}catch(e){} };
+    img.src=state.companyForm.signature;
+  }
+
+  let drawing=false,lastX=0,lastY=0,moved=false;
+  const pos=e=>{
+    const r=canvas.getBoundingClientRect();
+    return [e.clientX-r.left, e.clientY-r.top];
+  };
+  const start=e=>{drawing=true;moved=false;[lastX,lastY]=pos(e);e.preventDefault();};
+  const move=e=>{
+    if(!drawing)return;
+    const[x,y]=pos(e);
+    ctx.beginPath();ctx.moveTo(lastX,lastY);ctx.lineTo(x,y);ctx.stroke();
+    [lastX,lastY]=[x,y];moved=true;e.preventDefault();
+  };
+  const end=()=>{
+    if(drawing&&moved){state.companyForm.signature=canvas.toDataURL('image/png');}
+    drawing=false;
+  };
+  canvas.onpointerdown=start;
+  canvas.onpointermove=move;
+  canvas.onpointerup=end;
+  canvas.onpointerleave=end;
+}
+function clearSignature(){
+  const canvas=document.getElementById('sigCanvas');
+  if(canvas){const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);}
+  state.companyForm.signature='';
 }
 
 function addProject(){state.editingProject=null;state.projectForm={name:'',address:''};state.settingsView='editProject';render();}
@@ -904,7 +967,7 @@ async function boot(){
     const[co,prj,rpts,dates]=await Promise.all([
       DB.settings.get(),DB.projects.all(),DB.reports.byDate(todayStr()),DB.reports.allDates(),
     ]);
-    state.company=co?{companyName:co.companyName||'',companyAddress:co.companyAddress||'',engineerName:co.engineerName||''}:{companyName:'',companyAddress:'',engineerName:''};
+    state.company=co?{companyName:co.companyName||'',companyAddress:co.companyAddress||'',engineerName:co.engineerName||'',signature:co.signature||''}:{companyName:'',companyAddress:'',engineerName:'',signature:''};
     state.projects=prj||[];
     state.reports=rpts||[];
     state.allDates=dates||[];
