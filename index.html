@@ -16,10 +16,20 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.65
 button{cursor:pointer;border:none}
 ::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-thumb{background:#2D1B8E40;border-radius:4px}
+#printRoot{display:none}
+@page{margin:0;size:auto}
+@media print{
+  *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
+  #app{display:none !important}
+  #printRoot{display:block !important;width:100%;padding:10mm 8mm;font-family:-apple-system,'Segoe UI',Arial,sans-serif}
+  #printRoot table{width:100%;border-collapse:collapse}
+  #printRoot img{display:block;max-width:100%}
+}
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="printRoot"></div>
 <script>
 // ── PWA setup ────────────────────────────────────────────────
 (function(){
@@ -705,47 +715,14 @@ function buildPrintBody(date,items){
 // Print via an isolated hidden <iframe> so ONLY this generated report is
 // ever sent to the printer — never the surrounding app/page content.
 function doPrint(bodyHtml){
-  if(printFrame){try{printFrame.remove();}catch(e){}printFrame=null;}
-  printFrame=document.createElement('iframe');
-  printFrame.setAttribute('aria-hidden','true');
-  printFrame.style.position='fixed';
-  printFrame.style.right='0';
-  printFrame.style.bottom='0';
-  printFrame.style.width='0';
-  printFrame.style.height='0';
-  printFrame.style.border='0';
-  document.body.appendChild(printFrame);
-
-  const fullHtml=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Daily Progress Report</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Segoe UI',Arial,sans-serif}
-    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
-    body{padding:10mm 8mm;color:${C.ink};background:#fff}
-    table{width:100%;border-collapse:collapse}
-    img{display:block}
-    @page{size:auto;margin:0}
-    html,body{width:100%}
-    @media print{
-      *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
-    }
-  </style></head><body>${bodyHtml}</body></html>`;
-
-  const doc=printFrame.contentWindow.document;
-  doc.open();doc.write(fullHtml);doc.close();
-
-  let fired=false;
-  const fire=()=>{
-    if(fired)return;fired=true;
-    try{
-      printFrame.contentWindow.focus();
-      printFrame.contentWindow.print();
-    }catch(e){console.error('Print failed',e);}
-  };
-  try{
-    printFrame.contentWindow.onafterprint=()=>{ if(printFrame){printFrame.remove();printFrame=null;} };
-  }catch(e){}
-  printFrame.onload=fire;
-  setTimeout(fire,500); // fallback for browsers that don't fire onload reliably after doc.write
+  const root=document.getElementById('printRoot');
+  if(!root){console.error('printRoot missing');return;}
+  root.innerHTML=bodyHtml;
+  // Give the browser a moment to paint the injected content before opening
+  // the print dialog — avoids occasional blank-first-render issues on iOS.
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    window.print();
+  }));
 }
 
 function printAllSites(){
