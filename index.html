@@ -185,10 +185,12 @@ const secHead=(icon,title)=>
     <div style="flex:1;height:1px;background:${C.border}"></div>
   </div>`;
 
-const dataTable=(cols,rows)=>{
+const dataTable=(cols,rows,centerIdx)=>{
   if(!rows||!rows.length)return '';
-  const ths=cols.map((c,i)=>`<th style="padding:5px 9px;text-align:${i===cols.length-1?'right':'left'};font-weight:700;color:${C.navy};font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;background:${C.cloud};border-radius:${i===0?'7px 0 0 7px':i===cols.length-1?'0 7px 7px 0':'0'}">${c}</th>`).join('');
-  const trs=rows.map((row,ri)=>`<tr>${row.map((cell,ci)=>`<td style="padding:5px 9px;text-align:${ci===row.length-1?'right':'left'};color:${ci===0?C.ink:C.slate};font-weight:${ci===0?600:400};border-bottom:${ri<rows.length-1?`1px solid ${C.border}`:'none'}">${cell}</td>`).join('')}</tr>`).join('');
+  const ci=centerIdx||[];
+  const alignFor=i=>ci.includes(i)?'center':'left';
+  const ths=cols.map((c,i)=>`<th style="padding:5px 9px;text-align:${alignFor(i)};font-weight:700;color:${C.navy};font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;background:${C.cloud};border-radius:${i===0?'7px 0 0 7px':i===cols.length-1?'0 7px 7px 0':'0'}">${c}</th>`).join('');
+  const trs=rows.map((row,ri)=>`<tr>${row.map((cell,colIdx)=>`<td style="padding:5px 9px;text-align:${alignFor(colIdx)};color:${colIdx===0?C.ink:C.slate};font-weight:${colIdx===0?600:400};border-bottom:${ri<rows.length-1?`1px solid ${C.border}`:'none'}">${cell}</td>`).join('')}</tr>`).join('');
   return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
 };
 
@@ -338,10 +340,10 @@ function reportCard(project,report){
     </div>
     <div style="padding:13px 14px">
       ${(report.weather||report.siteNote)?`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:9px 12px;margin-bottom:13px;display:flex;gap:8px;align-items:flex-start"><span>☀️</span><div style="font-size:12.5px"><span style="font-weight:700;color:#92400E">${esc(report.weather)}</span>${report.siteNote?`<span style="color:#78350F"> — ${esc(report.siteNote)}</span>`:''}</div></div>`:''}
-      ${lRows.length?`<div style="margin-bottom:13px">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows)}</div>`:''}
-      ${dRows.length?`<div style="margin-bottom:13px">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows)}</div>`:''}
-      ${mRows.length?`<div style="margin-bottom:13px">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows)}</div>`:''}
-      ${reqRows.length?`<div style="margin-bottom:13px">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows)}</div>`:''}
+      ${lRows.length?`<div style="margin-bottom:13px">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows,[1])}</div>`:''}
+      ${dRows.length?`<div style="margin-bottom:13px">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows,[1])}</div>`:''}
+      ${mRows.length?`<div style="margin-bottom:13px">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows,[1])}</div>`:''}
+      ${reqRows.length?`<div style="margin-bottom:13px">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows,[1])}</div>`:''}
       ${photoGridView(report.photos)}
     </div>
   </div>`;
@@ -552,10 +554,10 @@ function viewDetail(){
       </div>
     </div>
     ${(r.weather||r.siteNote)?`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px;padding:11px 14px;margin-bottom:12px;display:flex;gap:10px"><span style="font-size:16px">☀️</span><div><div style="font-size:10px;font-weight:800;color:#92400E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Site Status</div><span style="font-weight:700;color:#78350F;font-size:13px">${esc(r.weather)}</span>${r.siteNote?`<span style="color:#78350F;font-size:13px"> — ${esc(r.siteNote)}</span>`:''}</div></div>`:''}
-    ${lRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows)}</div>`:''}
-    ${dRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows)}</div>`:''}
-    ${mRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows)}</div>`:''}
-    ${reqRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows)}</div>`:''}
+    ${lRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows,[1])}</div>`:''}
+    ${dRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows,[1])}</div>`:''}
+    ${mRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows,[1])}</div>`:''}
+    ${reqRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows,[1])}</div>`:''}
     ${(r.photos&&r.photos.length)?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${photoGridView(r.photos)}</div>`:''}
   </div>`;
 }
@@ -656,20 +658,20 @@ function printSiteSectionHTML(project,report){
   }
 
   const lRows=(report.labour||[]).filter(l=>l.category).map(l=>[esc(l.category),esc(l.count),esc(l.floor),esc(l.workDone)]);
-  if(lRows.length) html+=`<div style="margin-bottom:9px">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows)}</div>`;
+  if(lRows.length) html+=`<div style="margin-bottom:9px">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows,[1])}</div>`;
 
   const dW=(report.deptWork||[]).reduce((s,d)=>s+(Number(d.workers)||0),0);
   const dRowsBase=(report.deptWork||[]).filter(d=>d.category).map(d=>[esc(d.category),esc(d.workers),esc(d.floor),esc(d.workDone)]);
   if(dRowsBase.length){
     const dRows=[...dRowsBase,...(dW>0?[[`<strong>Total</strong>`,dW,'','']]:[])];
-    html+=`<div style="margin-bottom:9px">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows)}</div>`;
+    html+=`<div style="margin-bottom:9px">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows,[1])}</div>`;
   }
 
   const mRows=(report.matBought||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
-  if(mRows.length) html+=`<div style="margin-bottom:9px">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows)}</div>`;
+  if(mRows.length) html+=`<div style="margin-bottom:9px">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows,[1])}</div>`;
 
   const reqRows=(report.matRequired||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
-  if(reqRows.length) html+=`<div style="margin-bottom:9px">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows)}</div>`;
+  if(reqRows.length) html+=`<div style="margin-bottom:9px">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows,[1])}</div>`;
 
   if(!lRows.length&&!dRowsBase.length&&!mRows.length&&!reqRows.length&&!(report.photos&&report.photos.length)){
     html+=`<div style="font-size:11px;color:${C.fog};font-style:italic;padding:2px 0">No detailed work logged for this site today.</div>`;
@@ -693,7 +695,7 @@ function buildPrintBody(date,items){
     ${co.signature?`<img src="${co.signature}" style="height:46px;display:block;margin-bottom:3px">`:''}
     <div style="font-size:11px;font-weight:700;color:${C.slate}">Site Engineer</div>
   </div>`;
-  return `<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:${C.ink};max-width:900px;margin:0 auto">
+  return `<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:${C.ink};width:100%">
     ${printHeaderHTML(date,co)}
     ${sections}
     ${signature}
@@ -718,10 +720,11 @@ function doPrint(bodyHtml){
   <style>
     *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Segoe UI',Arial,sans-serif}
     *{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
-    body{padding:10px 8px;color:${C.ink};background:#fff}
+    body{padding:10mm 8mm;color:${C.ink};background:#fff}
     table{width:100%;border-collapse:collapse}
     img{display:block}
-    @page{margin:6mm 5mm}
+    @page{size:auto;margin:0}
+    html,body{width:100%}
     @media print{
       *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
     }
