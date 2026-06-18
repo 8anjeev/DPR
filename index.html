@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#1E1458">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Site Reports">
+<title>Site Reports</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:#F0F2FF;color:#1E1458;min-height:100vh}
+input,button,textarea{font-family:inherit;outline:none}
+input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.65;cursor:pointer}
+button{cursor:pointer;border:none}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:#2D1B8E40;border-radius:4px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ── PWA setup ────────────────────────────────────────────────
+(function(){
+  const mf={name:"Site Reports",short_name:"Site Reports",start_url:"./",display:"standalone",
+    theme_color:"#1E1458",background_color:"#F0F2FF",
+    icons:[{src:"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%231E1458'/%3E%3Ctext y='.85em' font-size='120' x='24'%3E%F0%9F%8F%97%EF%B8%8F%3C/text%3E%3C/svg%3E",sizes:"192x192",type:"image/svg+xml"}]};
+  try{const b=new Blob([JSON.stringify(mf)],{type:'application/json'});const l=document.createElement('link');l.rel='manifest';l.href=URL.createObjectURL(b);document.head.appendChild(l);}catch(e){}
+  if('serviceWorker' in navigator){try{const sw=`const C='sr-v6';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('fetch',e=>e.respondWith(fetch(e.request).catch(()=>new Response('offline'))));`;navigator.serviceWorker.register(URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))).catch(()=>{});}catch(e){}}
+})();
+
+// ── IndexedDB ────────────────────────────────────────────────
+function openDB(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open('SiteReportsPWA2',1);
+    r.onupgradeneeded=e=>{
+      const db=e.target.result;
+      if(!db.objectStoreNames.contains('settings'))
+        db.createObjectStore('settings',{keyPath:'key'});
+      if(!db.objectStoreNames.contains('projects'))
+        db.createObjectStore('projects',{keyPath:'id',autoIncrement:true});
+      if(!db.objectStoreNames.contains('reports')){
+        const s=db.createObjectStore('reports',{keyPath:'id',autoIncrement:true});
+        s.createIndex('date','date');
+        s.createIndex('projectDate',['projectId','date'],{unique:true});
+      }
+    };
+    r.onsuccess=()=>res(r.result);
+    r.onerror=()=>rej(r.error);
+  });
+}
+async function txOp(store,mode,fn){
+  const db=await openDB();
+  return new Promise((res,rej)=>{
+    const t=db.transaction(store,mode),s=t.objectStore(store),r=fn(s);
+    if(r){r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);}
+    else{t.oncomplete=()=>res();t.onerror=()=>rej(t.error);}
+  });
+}
+const DB={
+  settings:{
+    get:()=>txOp('settings','readonly',s=>s.get('company')),
+    save:obj=>txOp('settings','readwrite',s=>s.put({key:'company',...obj})),
+  },
+  projects:{
+    all:()=>txOp('projects','readonly',s=>s.getAll()),
+    save:p=>{
+      if(p.id) return txOp('projects','readwrite',s=>s.put(p));
+      const{id,...rest}=p;
+      return txOp('projects','readwrite',s=>s.add(rest));
+    },
+    del:id=>txOp('projects','readwrite',s=>s.delete(id)),
+  },
+  reports:{
+    byDate:async date=>{
+      const db=await openDB();
+      return new Promise((res,rej)=>{
+        const r=db.transaction('reports','readonly').objectStore('reports').index('date').getAll(date);
+        r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);
+      });
+    },
+    save:async r=>{
+      const db=await openDB();
+      return new Promise((res,rej)=>{
+        const t=db.transaction('reports','readwrite');
+        const req=r.id?t.objectStore('reports').put(r):t.objectStore('reports').add(r);
+        req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);
+      });
+    },
+    del:id=>txOp('reports','readwrite',s=>s.delete(id)),
+    allDates:async()=>{
+      const db=await openDB();
+      return new Promise((res,rej)=>{
+        const r=db.transaction('reports','readonly').objectStore('reports').getAll();
+        r.onsuccess=()=>res([...new Set(r.result.map(x=>x.date))].sort().reverse());
+        r.onerror=()=>rej(r.error);
+      });
+    }
+  }
+};
+
+// ── Helpers ──────────────────────────────────────────────────
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const fmtDate=s=>{const d=new Date(s+'T12:00:00');return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;};
+const fmtDay =s=>DAYS[new Date(s+'T12:00:00').getDay()];
+const fmtShrt=s=>{const d=new Date(s+'T12:00:00');return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0,3)}`;};
+const uid=()=>`r${Date.now()}${Math.random().toString(36).slice(2,6)}`;
+const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const todayStr=()=>new Date().toISOString().split('T')[0];
+
+// ── Colours ──────────────────────────────────────────────────
+const C={
+  ink:'#1E1458',navy:'#2D1B8E',royal:'#4A3AB5',
+  gold:'#D97706',amber:'#F59E0B',mint:'#059669',rose:'#E11D48',
+  slate:'#475569',fog:'#94A3B8',
+  snow:'#F8F7FF',cloud:'#EEF0FF',white:'#FFFFFF',border:'#DDE2F5',bg:'#F0F2FF',
+};
+const APALS=[C.navy,'#0F766E','#7C3AED','#B45309','#0369A1','#BE185D'];
+const aColor=name=>APALS[(name||'?').charCodeAt(0)%APALS.length];
+const MAX_PHOTOS=8;
+
+// ── App State ────────────────────────────────────────────────
+const state={
+  view:'dashboard',
+  company:{companyName:'',companyAddress:'',engineerName:''},
+  projects:[],
+  date:todayStr(),reports:[],allDates:[],
+  activeProject:null,activeReport:null,
+  confirm:null,
+  settingsView:'main',
+  editingProject:null,
+  projectForm:{name:'',address:''},
+  companyForm:{companyName:'',companyAddress:'',engineerName:''},
+};
+let formState=null;
+let confirmTimer=null;
+let printFrame=null;
+
+// ── SVG Icons ────────────────────────────────────────────────
+const IC={
+  gear:`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  plus:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  back:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>`,
+  print:`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`,
+  edit:`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+  trash:`<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>`,
+  eye:`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  check:`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  cal:`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`,
+  office:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="12"/></svg>`,
+  map:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`,
+  lock:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+  camera:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`,
+};
+
+// ── HTML Blocks ──────────────────────────────────────────────
+const avatar=(name,size=44)=>{
+  const bg=aColor(name);
+  return `<div style="width:${size}px;height:${size}px;border-radius:12px;flex-shrink:0;background:linear-gradient(135deg,${bg},${bg}99);display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:${Math.round(size*.38)}px;box-shadow:0 3px 10px ${bg}55">${(name||'?')[0].toUpperCase()}</div>`;
+};
+
+const appBar=(title,sub,left,right)=>`
+<div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);position:sticky;top:0;z-index:100;box-shadow:0 4px 24px ${C.ink}40">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px">
+    <div style="display:flex;align-items:center;gap:9px">
+      ${left||''}
+      <div style="line-height:1.25">
+        <div style="color:white;font-size:15.5px;font-weight:800;letter-spacing:.3px">${title}</div>
+        ${sub?`<div style="color:rgba(255,255,255,.6);font-size:10.5px;margin-top:0">${sub}</div>`:''}
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">${right||''}</div>
+  </div>
+</div>`;
+
+const ibtn=(icon,fn,bg='rgba(255,255,255,.15)',color='white',title='')=>
+  `<button onclick="${fn}" title="${title}" style="background:${bg};border:none;border-radius:10px;padding:8px;cursor:pointer;color:${color};display:flex;align-items:center;justify-content:center">${icon}</button>`;
+
+const secHead=(icon,title)=>
+  `<div style="display:flex;align-items:center;gap:7px;margin-bottom:7px">
+    <span style="font-size:13px">${icon}</span>
+    <span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.8px;color:${C.navy}">${title}</span>
+    <div style="flex:1;height:1px;background:${C.border}"></div>
+  </div>`;
+
+const dataTable=(cols,rows)=>{
+  if(!rows||!rows.length)return '';
+  const ths=cols.map((c,i)=>`<th style="padding:5px 9px;text-align:${i===cols.length-1?'right':'left'};font-weight:700;color:${C.navy};font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;background:${C.cloud};border-radius:${i===0?'7px 0 0 7px':i===cols.length-1?'0 7px 7px 0':'0'}">${c}</th>`).join('');
+  const trs=rows.map((row,ri)=>`<tr>${row.map((cell,ci)=>`<td style="padding:5px 9px;text-align:${ci===row.length-1?'right':'left'};color:${ci===0?C.ink:C.slate};font-weight:${ci===0?600:400};border-bottom:${ri<rows.length-1?`1px solid ${C.border}`:'none'}">${cell}</td>`).join('')}</tr>`).join('');
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table></div>`;
+};
+
+// 2-row x 4-col photo grid (max 8) — used identically in app views & print
+const photoGridView=(photos)=>{
+  if(!photos||!photos.length)return '';
+  const cells=photos.map(p=>`<div style="aspect-ratio:1;border-radius:8px;overflow:hidden;border:1px solid ${C.border};background:${C.snow}"><img src="${p.src}" style="width:100%;height:100%;object-fit:cover;display:block"></div>`).join('');
+  return `<div>${secHead('📸','Site Photos')}<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;page-break-inside:avoid">${cells}</div></div>`;
+};
+
+// ── Row Editor ───────────────────────────────────────────────
+const ROW_FIELDS={
+  labour:[{key:'category',label:'Category',ph:'Mason / Labour / Carpenter...'},{key:'count',label:'Count',ph:'4',type:'number'},{key:'floor',label:'Floor',ph:'Ground / 1st / Terrace'},{key:'workDone',label:'Work Done',ph:'Concreting, soiling of Footing 79',full:true}],
+  deptWork:[{key:'category',label:'Category',ph:'Mason / Labour'},{key:'workers',label:'Workers',ph:'1',type:'number'},{key:'floor',label:'Floor',ph:'Ground / 1st / Terrace'},{key:'workDone',label:'Work Done',ph:'Concrete around RCC pipe',full:true}],
+  matBought:[{key:'material',label:'Material',ph:'Cement / Hammer beat'},{key:'qty',label:'Qty',ph:'10',type:'number'},{key:'unit',label:'Unit',ph:'Bags / Kg / Nos'}],
+  matRequired:[{key:'material',label:'Material',ph:'Binding wire / Cement'},{key:'qty',label:'Qty Needed',ph:'10',type:'number'},{key:'unit',label:'Unit',ph:'Kg / Bags / Nos'}],
+};
+const ROW_BLANKS={
+  labour:{category:'',count:'',floor:'',workDone:''},
+  deptWork:{category:'',workers:'',floor:'',workDone:''},
+  matBought:{material:'',qty:'',unit:''},
+  matRequired:{material:'',qty:'',unit:''},
+};
+
+function buildRowsHTML(section){
+  const rows=formState[section]||[];
+  const fields=ROW_FIELDS[section];
+  return rows.map((row,ri)=>`
+    <div style="background:${C.snow};border:1px solid ${C.border};border-radius:12px;padding:12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:10.5px;font-weight:700;color:${C.fog}">#${ri+1}</span>
+        ${rows.length>1?`<button onclick="rmRow('${section}','${row.id}')" style="font-size:10px;font-weight:700;color:${C.rose};background:${C.rose}15;border:none;border-radius:6px;padding:3px 8px;cursor:pointer">Remove</button>`:''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${fields.map(f=>`<div style="${f.full?'grid-column:1/-1':''}">
+          <label style="display:block;font-size:9.5px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px">${f.label}</label>
+          <input type="${f.type||'text'}" value="${esc(row[f.key]||'')}" placeholder="${f.ph||''}"
+            oninput="updRow('${section}','${row.id}','${f.key}',this.value)"
+            style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid ${C.border};font-size:13px;background:${C.white};color:${C.ink};box-sizing:border-box">
+        </div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+function rowSection(icon,title,section){
+  return `<div style="margin-bottom:4px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:14px">${icon}</span>
+      <span style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.9px;color:${C.navy};flex:1">${title}</span>
+      <button onclick="addRow('${section}')" style="display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:8px;border:none;background:${C.cloud};color:${C.navy};font-size:11px;font-weight:700;cursor:pointer">${IC.plus} Add</button>
+    </div>
+    <div id="rows_${section}">${buildRowsHTML(section)}</div>
+  </div>`;
+}
+
+// ── Photo editor (form) ─────────────────────────────────────
+function buildPhotoGridEditableHTML(){
+  const photos=formState.photos||[];
+  const cells=photos.map(p=>`
+    <div style="position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;border:1.5px solid ${C.border}">
+      <img src="${p.src}" style="width:100%;height:100%;object-fit:cover;display:block">
+      <button onclick="removePhoto('${p.id}')" style="position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.62);color:white;border:none;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1">✕</button>
+    </div>`).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${cells}</div>`;
+}
+function photoSection(){
+  const n=(formState.photos||[]).length;
+  const full=n>=MAX_PHOTOS;
+  return `<div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <span style="font-size:14px">📸</span>
+      <span style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.9px;color:${C.navy};flex:1">Site Photos</span>
+      <span style="font-size:10.5px;font-weight:700;color:${full?C.rose:C.fog}">${n}/${MAX_PHOTOS}</span>
+    </div>
+    <div id="photoGrid">${buildPhotoGridEditableHTML()}</div>
+    <label style="display:${full?'none':'flex'};align-items:center;justify-content:center;gap:6px;margin-top:10px;padding:11px;border-radius:10px;border:1.5px dashed ${C.border};background:${C.snow};color:${C.navy};font-size:12.5px;font-weight:700;cursor:pointer">
+      ${IC.camera} Add Photos (up to ${MAX_PHOTOS})
+      <input type="file" accept="image/*" multiple style="display:none" onchange="onPhotoInputChange(this)">
+    </label>
+    ${full?`<div style="text-align:center;font-size:11px;color:${C.fog};margin-top:8px">Maximum of ${MAX_PHOTOS} photos reached — remove one to add another</div>`:''}
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VIEWS
+// ═══════════════════════════════════════════════════════════════
+
+// Combined dashboard header: Company (bold) + Engineer stacked on the left,
+// Date picker + Day centered, Print/Settings on the right. No app name/logo.
+function dashboardHeader(){
+  const co=state.company,date=state.date;
+  return `
+  <div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);position:sticky;top:0;z-index:100;box-shadow:0 4px 24px ${C.ink}40">
+    <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:7px 12px;gap:5px">
+      <div style="min-width:0;line-height:1.25">
+        <div style="color:white;font-size:14.5px;font-weight:800;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(co.companyName||'My Company')}</div>
+        ${co.engineerName?`<div style="color:rgba(255,255,255,.65);font-size:10.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Er. ${esc(co.engineerName)}</div>`:''}
+      </div>
+      <div style="text-align:center;line-height:1.2">
+        <input type="date" value="${date}" onchange="changeDate(this.value)" style="background:rgba(255,255,255,.16);border:none;border-radius:9px;color:white;font-size:12.5px;font-weight:700;padding:5px 9px;outline:none;text-align:center;cursor:pointer;max-width:138px">
+        <div style="color:rgba(255,255,255,.6);font-size:9.5px;font-weight:800;margin-top:3px;letter-spacing:.7px">${fmtDay(date).toUpperCase()}</div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:6px">
+        ${ibtn(IC.print,"printAllSites()",undefined,undefined,'Print Daily Progress Report')}
+        ${ibtn(IC.gear,"navSettings()",undefined,undefined,'Settings')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function viewDashboard(){
+  const{projects,reports,date,allDates}=state;
+  const pills=allDates.length>1?allDates.slice(0,8).map(d=>`<button onclick="gotoDate('${d}')" style="padding:5px 12px;border-radius:20px;font-size:11px;font-weight:700;border:1.5px solid ${d===date?C.navy:C.border};cursor:pointer;background:${d===date?C.navy:C.white};color:${d===date?'white':C.slate}">${fmtShrt(d)}</button>`).join(''):'';
+  const cards=projects.length===0
+    ?`<div style="text-align:center;padding:60px 20px"><div style="font-size:52px;margin-bottom:16px">🏗️</div><div style="font-size:20px;font-weight:800;color:${C.ink};margin-bottom:8px">No Projects Added Yet</div><div style="font-size:14px;color:${C.fog};margin-bottom:24px">Open Settings to add your company & projects</div><button onclick="navSettings()" style="display:inline-flex;align-items:center;gap:6px;padding:10px 20px;border-radius:10px;border:none;font-weight:700;font-size:13px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 2px 10px ${C.navy}40">${IC.gear} Open Settings</button></div>`
+    :projects.map(p=>{const r=reports.find(r=>r.projectId===p.id);return r?reportCard(p,r):emptyCard(p);}).join('');
+
+  return dashboardHeader()+`
+  <div style="padding:14px;padding-bottom:36px">
+    ${allDates.length>1?`<div style="margin-bottom:14px"><div style="font-size:10px;font-weight:800;color:${C.fog};text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px">Recent Reports</div><div style="display:flex;gap:6px;flex-wrap:wrap">${pills}</div></div>`:''}
+    ${cards}
+  </div>`;
+}
+
+function reportCard(project,report){
+  const lRows=(report.labour||[]).filter(l=>l.category).map(l=>[esc(l.category),`<span style="background:${C.cloud};color:${C.navy};font-weight:700;font-size:11px;padding:2px 8px;border-radius:20px">${esc(l.count)}</span>`,esc(l.floor),esc(l.workDone)]);
+  const dRows=(report.deptWork||[]).filter(d=>d.category).map(d=>[esc(d.category),esc(d.workers),esc(d.floor),esc(d.workDone)]);
+  const mRows=(report.matBought||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
+  const reqRows=(report.matRequired||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
+  const pid=project.id,rid=report.id;
+
+  return `
+  <div style="background:${C.white};border-radius:18px;overflow:hidden;margin-bottom:14px;box-shadow:0 2px 16px ${C.ink}0E;border:1px solid ${C.border}">
+    <div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);padding:8px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:9px;align-items:center;flex:1;min-width:0">
+          ${avatar(project.name,38)}
+          <div style="min-width:0;line-height:1.25">
+            <div style="color:white;font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(project.name)}</div>
+            ${project.address?`<div style="color:rgba(255,255,255,.72);font-size:11.5px;margin-top:1px">${esc(project.address)}</div>`:''}
+          </div>
+        </div>
+        <div style="display:flex;gap:5px;flex-shrink:0;margin-left:8px">
+          ${ibtn(IC.eye,`viewRpt(${pid},${rid})`,'rgba(255,255,255,.15)','white','View')}
+          ${ibtn(IC.edit,`editRpt(${pid},${rid})`,'rgba(255,255,255,.15)','white','Edit')}
+        </div>
+      </div>
+    </div>
+    <div style="padding:13px 14px">
+      ${(report.weather||report.siteNote)?`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:10px;padding:9px 12px;margin-bottom:13px;display:flex;gap:8px;align-items:flex-start"><span>☀️</span><div style="font-size:12.5px"><span style="font-weight:700;color:#92400E">${esc(report.weather)}</span>${report.siteNote?`<span style="color:#78350F"> — ${esc(report.siteNote)}</span>`:''}</div></div>`:''}
+      ${lRows.length?`<div style="margin-bottom:13px">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows)}</div>`:''}
+      ${dRows.length?`<div style="margin-bottom:13px">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows)}</div>`:''}
+      ${mRows.length?`<div style="margin-bottom:13px">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows)}</div>`:''}
+      ${reqRows.length?`<div style="margin-bottom:13px">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows)}</div>`:''}
+      ${photoGridView(report.photos)}
+    </div>
+  </div>`;
+}
+
+function emptyCard(project){
+  return `
+  <div style="background:${C.white};border-radius:18px;margin-bottom:14px;border:1.5px solid ${C.border};overflow:hidden">
+    <div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);padding:8px 14px">
+      <div style="display:flex;gap:9px;align-items:center">${avatar(project.name,38)}
+        <div style="line-height:1.25">
+          <div style="color:white;font-size:15px;font-weight:800">${esc(project.name)}</div>
+          ${project.address?`<div style="color:rgba(255,255,255,.72);font-size:11.5px;margin-top:1px">${esc(project.address)}</div>`:''}
+        </div>
+      </div>
+    </div>
+    <div style="padding:16px 14px">
+      <div style="background:#FEF2F2;border:1.5px dashed #FCA5A5;border-radius:10px;padding:14px;text-align:center;margin-bottom:14px;display:flex;flex-direction:column;align-items:center;gap:5px">
+        <div style="display:flex;align-items:center;gap:6px;color:#B91C1C;font-weight:800;font-size:13px">${IC.lock} SITE CLOSED TODAY</div>
+        <div style="font-size:11.5px;color:#991B1B">No work reported for ${fmtDate(state.date)}</div>
+      </div>
+      <button onclick="addRpt(${project.id})" style="width:100%;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:11px 18px;border-radius:10px;border:none;font-weight:700;font-size:13px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 2px 10px ${C.navy}40">${IC.plus} Add Daily Report</button>
+    </div>
+  </div>`;
+}
+
+// ── Settings ─────────────────────────────────────────────────
+function viewSettings(){
+  const{company,projects,settingsView,editingProject,projectForm,companyForm}=state;
+  const iStyle=`width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid ${C.border};font-size:14px;background:${C.snow};color:${C.ink};box-sizing:border-box`;
+
+  if(settingsView==='editCompany'){
+    return appBar('Company Info','Shown on every printed report',ibtn(IC.back,'settingsBack()'),'')+
+    `<div style="padding:14px">
+      <div style="background:${C.white};border-radius:16px;overflow:hidden;box-shadow:0 2px 12px ${C.ink}0A;border:1px solid ${C.border}">
+        <div style="background:linear-gradient(135deg,${C.ink},${C.navy});padding:10px 16px;display:flex;align-items:center;gap:9px">
+          <span style="color:white;font-size:18px">${IC.office}</span>
+          <span style="color:white;font-weight:800;font-size:15px">Company Information</span>
+        </div>
+        <div style="padding:16px">
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Company Name</label>
+            <input id="inp_cname" value="${esc(companyForm.companyName)}" placeholder="e.g. Sanjineer Construction" oninput="state.companyForm.companyName=this.value" style="${iStyle}">
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Company Address</label>
+            <input id="inp_caddr" value="${esc(companyForm.companyAddress)}" placeholder="e.g. Margao, Goa" oninput="state.companyForm.companyAddress=this.value" style="${iStyle}">
+          </div>
+          <div style="margin-bottom:20px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Engineer Name</label>
+            <input id="inp_ename" value="${esc(companyForm.engineerName)}" placeholder="e.g. Sanjeev" oninput="state.companyForm.engineerName=this.value" style="${iStyle}">
+          </div>
+          <button onclick="saveCompany()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:12px;border:none;font-weight:700;font-size:15px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 3px 12px ${C.navy}40;letter-spacing:.3px">
+            ${IC.check} Save Company Info
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  if(settingsView==='editProject'){
+    const isEdit=!!(editingProject&&editingProject.id);
+    return appBar(isEdit?'Edit Project':'Add Project','Project name & address',ibtn(IC.back,'settingsBack()'),'')+
+    `<div style="padding:14px">
+      <div style="background:${C.white};border-radius:16px;overflow:hidden;box-shadow:0 2px 12px ${C.ink}0A;border:1px solid ${C.border}">
+        <div style="background:linear-gradient(135deg,${C.ink},${C.navy});padding:10px 16px;display:flex;align-items:center;gap:9px">
+          <span style="color:white;font-size:18px">${IC.map}</span>
+          <span style="color:white;font-weight:800;font-size:15px">${isEdit?'Edit Project':'New Project'}</span>
+        </div>
+        <div style="padding:16px">
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Project / Site Name *</label>
+            <input id="inp_pname" value="${esc(projectForm.name)}" placeholder="e.g. PHC Curtorim" oninput="state.projectForm.name=this.value" style="${iStyle}">
+          </div>
+          <div style="margin-bottom:20px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Site Address</label>
+            <input id="inp_paddr" value="${esc(projectForm.address)}" placeholder="e.g. Curtorim, Goa" oninput="state.projectForm.address=this.value" style="${iStyle}">
+          </div>
+          <button onclick="saveProject()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;padding:13px;border-radius:12px;border:none;font-weight:700;font-size:15px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 3px 12px ${C.navy}40;letter-spacing:.3px">
+            ${IC.check} ${isEdit?'Update Project':'Add Project'}
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const companySet=company.companyName||company.companyAddress||company.engineerName;
+  const companyCard=`
+    <div style="background:${C.white};border-radius:16px;margin-bottom:16px;box-shadow:0 2px 10px ${C.ink}07;border:1px solid ${C.border};overflow:hidden">
+      <div style="background:linear-gradient(135deg,${C.ink},${C.navy});padding:9px 14px">
+        <span style="color:white;font-weight:800;font-size:13px;letter-spacing:.3px">🏢 Company Information</span>
+      </div>
+      <div style="padding:14px 16px">
+        ${companySet?`
+          <div style="margin-bottom:12px">
+            <div style="font-size:16px;font-weight:800;color:${C.ink}">${esc(company.companyName||'—')}</div>
+            ${company.companyAddress?`<div style="font-size:13px;color:${C.slate};margin-top:2px">${esc(company.companyAddress)}</div>`:''}
+            <div style="font-size:12.5px;color:${C.fog};margin-top:4px">Engineer: ${esc(company.engineerName||'—')}</div>
+          </div>`
+          :`<div style="font-size:13px;color:${C.fog};margin-bottom:12px;font-style:italic">No company info saved yet — this appears on every printed report</div>`}
+        <button onclick="editCompany()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:10px;border:none;font-weight:700;font-size:13px;cursor:pointer;background:${C.cloud};color:${C.navy}">
+          ${IC.edit} ${companySet?'Edit Company Info':'Set Company Info'}
+        </button>
+      </div>
+    </div>`;
+
+  const projectsCard=`
+    <div style="background:${C.white};border-radius:16px;box-shadow:0 2px 10px ${C.ink}07;border:1px solid ${C.border};overflow:hidden">
+      <div style="background:linear-gradient(135deg,${C.ink},${C.navy});padding:9px 14px;display:flex;align-items:center;justify-content:space-between">
+        <span style="color:white;font-weight:800;font-size:13px;letter-spacing:.3px">📍 Projects / Sites</span>
+        <button onclick="addProject()" style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:8px;border:none;background:rgba(255,255,255,.18);color:white;font-size:12px;font-weight:700;cursor:pointer">
+          ${IC.plus} Add Project
+        </button>
+      </div>
+      <div style="padding:${projects.length?'8px 12px':'16px'}">
+        ${projects.length===0
+          ?`<div style="text-align:center;padding:24px 0;color:${C.fog}"><div style="font-size:32px;margin-bottom:8px">📍</div><div style="font-size:13px">No projects added yet</div></div>`
+          :projects.map((p,i)=>`
+            <div style="display:flex;align-items:center;gap:12px;padding:11px 4px;${i<projects.length-1?`border-bottom:1px solid ${C.border}`:''}">
+              ${avatar(p.name,40)}
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:700;color:${C.ink};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
+                ${p.address?`<div style="font-size:12px;color:${C.slate};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.address)}</div>`:''}
+              </div>
+              <div style="display:flex;gap:6px;flex-shrink:0">
+                <button onclick="editProject(${p.id})" style="padding:7px;border-radius:9px;border:none;background:${C.cloud};cursor:pointer;color:${C.navy};display:flex">${IC.edit}</button>
+                <button onclick="delProject(${p.id})" style="padding:7px;border-radius:9px;border:none;background:${C.rose}15;cursor:pointer;color:${C.rose};display:flex">${IC.trash}</button>
+              </div>
+            </div>`).join('')}
+      </div>
+    </div>`;
+
+  return appBar('Settings','Company & Projects',ibtn(IC.back,'navDash()'))+
+    `<div style="padding:14px">${companyCard}${projectsCard}<div style="text-align:center;font-size:11px;color:${C.fog};margin-top:14px;padding:0 10px">🔒 Projects can only be deleted from here, with a 3-second confirmation delay to prevent accidental loss.</div></div>`;
+}
+
+// ── Report Form ───────────────────────────────────────────────
+function viewForm(){
+  const p=state.activeProject;
+  const isEdit=!!(state.activeReport?.id);
+  const f=formState;
+  const iStyle=`width:100%;padding:9px 12px;border-radius:10px;border:1.5px solid ${C.border};font-size:13px;background:${C.snow};color:${C.ink};box-sizing:border-box`;
+  const weathers=[{e:'☀️',l:'Sunny'},{e:'🌧️',l:'Rainy'},{e:'⛅',l:'Cloudy'},{e:'🌦️',l:'Partly Cloudy'}];
+
+  return appBar(
+    isEdit?'Edit Report':'Add Report',
+    `${esc(p.name)} — ${fmtDate(state.date)}`,
+    ibtn(IC.back,'navDash()'),
+    `<button onclick="saveRpt()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:10px;border:none;font-weight:700;font-size:12px;cursor:pointer;background:linear-gradient(135deg,#059669,#10B981);color:white;box-shadow:0 2px 10px #05966940">${IC.check} Save</button>`
+  )+`
+  <div style="padding:14px;padding-bottom:40px">
+    <div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">
+      ${secHead('🌤️','Site Status')}
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px">
+        ${weathers.map(w=>`<button onclick="setWeather('${w.l}')" style="padding:7px 13px;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;border:1.5px solid ${f.weather===w.l?C.navy:C.border};background:${f.weather===w.l?C.cloud:C.white};color:${f.weather===w.l?C.navy:C.slate}">${w.e} ${w.l}</button>`).join('')}
+      </div>
+      <label style="display:block;font-size:9.5px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px">Site Note / Tomorrow's Requirement</label>
+      <input value="${esc(f.siteNote)}" placeholder="e.g. Binding wire for shuttering required tomorrow (10 kg min)" oninput="formState.siteNote=this.value" style="${iStyle}">
+    </div>
+    <div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${rowSection('👷','Labour Summary','labour')}</div>
+    <div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${rowSection('🏗️','Departmental Work','deptWork')}</div>
+    <div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${rowSection('🛒','Materials Received','matBought')}</div>
+    <div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${rowSection('📋','Material Required','matRequired')}</div>
+    ${photoSection()}
+    <div style="display:flex;gap:10px">
+      <button onclick="saveRpt()" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:12px;border:none;font-weight:700;font-size:14px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 2px 10px ${C.navy}40">${IC.check} Save Report</button>
+      <button onclick="navDash()" style="padding:12px 18px;border-radius:12px;font-weight:700;font-size:13px;cursor:pointer;background:transparent;color:${C.navy};border:1.5px solid ${C.border}">Cancel</button>
+    </div>
+  </div>`;
+}
+
+// ── Report Detail (in-app view) ───────────────────────────────
+function viewDetail(){
+  const p=state.activeProject,r=state.activeReport,date=state.date;
+  const dW=(r.deptWork||[]).reduce((s,d)=>s+(Number(d.workers)||0),0);
+  const lRows=(r.labour||[]).filter(l=>l.category).map(l=>[esc(l.category),`<span style="background:${C.cloud};color:${C.navy};font-weight:700;font-size:11px;padding:2px 8px;border-radius:20px">${esc(l.count)}</span>`,esc(l.floor),esc(l.workDone)]);
+  const dRows=[...(r.deptWork||[]).filter(d=>d.category).map(d=>[esc(d.category),esc(d.workers),esc(d.floor),esc(d.workDone)]),...(dW>0?[[`<strong>Total</strong>`,dW,'','']]:[])];
+  const mRows=(r.matBought||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
+  const reqRows=(r.matRequired||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
+
+  return `
+  ${appBar('Report Detail',`${fmtDate(date)} — ${fmtDay(date)}`,ibtn(IC.back,'navDash()'),
+    `<button onclick="printSingleSite()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:10px;border:none;font-weight:700;font-size:12px;cursor:pointer;background:linear-gradient(135deg,${C.gold},${C.amber});color:white;box-shadow:0 2px 10px ${C.gold}40">${IC.print} Print</button>`)}
+  <div style="padding:14px;padding-bottom:32px">
+    <div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);border-radius:16px;padding:14px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;gap:12px;align-items:center;flex:1">${avatar(p.name,46)}
+        <div style="line-height:1.3">
+          <div style="color:white;font-size:17px;font-weight:900;letter-spacing:.5px">${esc(p.name)}</div>
+          ${p.address?`<div style="color:rgba(255,255,255,.75);font-size:12.5px;margin-top:1px">${esc(p.address)}</div>`:''}
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;line-height:1.3">
+        <div style="color:#A5B4FC;font-size:9.5px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase">Daily Report</div>
+        <div style="color:white;font-size:15px;font-weight:900;margin-top:2px">${fmtDate(date)}</div>
+        <div style="color:rgba(255,255,255,.6);font-size:11.5px;margin-top:1px">${fmtDay(date)}</div>
+      </div>
+    </div>
+    ${(r.weather||r.siteNote)?`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:12px;padding:11px 14px;margin-bottom:12px;display:flex;gap:10px"><span style="font-size:16px">☀️</span><div><div style="font-size:10px;font-weight:800;color:#92400E;text-transform:uppercase;letter-spacing:.8px;margin-bottom:3px">Site Status</div><span style="font-weight:700;color:#78350F;font-size:13px">${esc(r.weather)}</span>${r.siteNote?`<span style="color:#78350F;font-size:13px"> — ${esc(r.siteNote)}</span>`:''}</div></div>`:''}
+    ${lRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows)}</div>`:''}
+    ${dRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows)}</div>`:''}
+    ${mRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows)}</div>`:''}
+    ${reqRows.length?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows)}</div>`:''}
+    ${(r.photos&&r.photos.length)?`<div style="background:${C.white};border-radius:14px;padding:13px 14px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">${photoGridView(r.photos)}</div>`:''}
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PHOTO HANDLING — resize client-side before storing in IndexedDB
+// ═══════════════════════════════════════════════════════════════
+function resizeImageFile(file,maxWidth=1000,quality=0.75){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=e=>{
+      const img=new Image();
+      img.onload=()=>{
+        let w=img.width,h=img.height;
+        if(w>maxWidth){h=Math.round(h*(maxWidth/w));w=maxWidth;}
+        const canvas=document.createElement('canvas');
+        canvas.width=w;canvas.height=h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',quality));
+      };
+      img.onerror=()=>reject(new Error('Image load failed'));
+      img.src=e.target.result;
+    };
+    reader.onerror=()=>reject(new Error('File read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+async function onPhotoInputChange(input){
+  const files=Array.from(input.files||[]);
+  if(!files.length)return;
+  if(!formState.photos)formState.photos=[];
+  const room=MAX_PHOTOS-formState.photos.length;
+  if(room<=0){alert(`Maximum ${MAX_PHOTOS} photos allowed per site report.`);input.value='';return;}
+  const toProcess=files.slice(0,room);
+  if(files.length>room) alert(`Only ${room} more photo(s) could be added (max ${MAX_PHOTOS} total). Extra photos were skipped.`);
+  for(const f of toProcess){
+    try{
+      const dataUrl=await resizeImageFile(f);
+      formState.photos.push({id:uid(),src:dataUrl});
+    }catch(e){console.error('Photo processing failed',e);}
+  }
+  input.value='';
+  // Re-render just the photo section so the rest of the form (typed text) isn't disturbed
+  state.view='form';render();
+}
+function removePhoto(id){
+  formState.photos=(formState.photos||[]).filter(p=>p.id!==id);
+  state.view='form';render();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PRINT / PDF GENERATION — isolated hidden <iframe>, prints ONLY
+// the generated report (never the surrounding app/page content).
+// Header: Engineer (left) | Company name+address+DPR title (center) | Date+Day (right)
+// Body: per-project content blocks in series — no monetary amounts
+// Each site ends with its own 2-row x 4-col photo grid (max 8 photos)
+// before the divider that leads into the next site's section.
+// Missing report for the date => auto "SITE CLOSED TODAY"
+// ═══════════════════════════════════════════════════════════════
+function printHeaderHTML(date,co){
+  return `
+  <div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);border-radius:9px;padding:9px 14px;margin-bottom:11px;display:flex;justify-content:space-between;align-items:center">
+    <div style="flex:1.3;text-align:left">
+      <div style="font-size:15px;font-weight:900;color:#fff;letter-spacing:.3px;line-height:1.15">${esc(co.companyName||'Company Name')}</div>
+      ${co.companyAddress?`<div style="font-size:10px;color:rgba(255,255,255,.75);margin-top:1px">${esc(co.companyAddress)}</div>`:''}
+    </div>
+    <div style="flex:1;text-align:center">
+      <div style="font-size:11.5px;font-weight:800;color:#fff">${fmtDate(date)}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,.75)">${fmtDay(date)}</div>
+    </div>
+    <div style="flex:1.1;text-align:right">
+      <div style="font-size:8px;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:1px">DPR Prepared By</div>
+      <div style="font-size:11.5px;font-weight:800;color:#fff">Er. ${esc(co.engineerName||'—')}</div>
+    </div>
+  </div>`;
+}
+
+function printSiteSectionHTML(project,report){
+  let html=`<div style="margin-bottom:14px;page-break-inside:avoid">`;
+  html+=`<div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);border-radius:8px;padding:7px 12px;margin-bottom:8px">
+    <div style="font-size:13.5px;font-weight:800;color:#fff">${esc(project.name)}</div>
+    ${project.address?`<div style="font-size:10.5px;color:rgba(255,255,255,.78)">${esc(project.address)}</div>`:''}
+  </div>`;
+
+  if(!report){
+    html+=`<div style="background:#FEF2F2;border:1.5px dashed #FCA5A5;border-radius:9px;padding:13px;text-align:center">
+      <div style="font-size:13px;font-weight:800;color:#B91C1C;letter-spacing:.5px">🔒 SITE CLOSED TODAY</div>
+      <div style="font-size:11px;color:#991B1B;margin-top:3px">No work reported for this date</div>
+    </div></div>`;
+    return html;
+  }
+
+  if(report.weather||report.siteNote){
+    html+=`<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:9px;padding:7px 11px;margin-bottom:9px">
+      <span style="font-weight:800;color:#92400E;font-size:11.5px">${esc(report.weather||'')}</span>
+      ${report.siteNote?`<span style="color:#78350F;font-size:11.5px"> — ${esc(report.siteNote)}</span>`:''}
+    </div>`;
+  }
+
+  const lRows=(report.labour||[]).filter(l=>l.category).map(l=>[esc(l.category),esc(l.count),esc(l.floor),esc(l.workDone)]);
+  if(lRows.length) html+=`<div style="margin-bottom:9px">${secHead('👷','Labour Summary')}${dataTable(['Category','Count','Floor','Work Done'],lRows)}</div>`;
+
+  const dW=(report.deptWork||[]).reduce((s,d)=>s+(Number(d.workers)||0),0);
+  const dRowsBase=(report.deptWork||[]).filter(d=>d.category).map(d=>[esc(d.category),esc(d.workers),esc(d.floor),esc(d.workDone)]);
+  if(dRowsBase.length){
+    const dRows=[...dRowsBase,...(dW>0?[[`<strong>Total</strong>`,dW,'','']]:[])];
+    html+=`<div style="margin-bottom:9px">${secHead('🏗️','Departmental Work')}${dataTable(['Category','Workers','Floor','Work Done'],dRows)}</div>`;
+  }
+
+  const mRows=(report.matBought||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
+  if(mRows.length) html+=`<div style="margin-bottom:9px">${secHead('🛒','Materials Received')}${dataTable(['Material','Qty'],mRows)}</div>`;
+
+  const reqRows=(report.matRequired||[]).filter(m=>m.material).map(m=>[esc(m.material),`${esc(m.qty)} ${esc(m.unit||'')}`.trim()]);
+  if(reqRows.length) html+=`<div style="margin-bottom:9px">${secHead('📋','Material Required')}${dataTable(['Material','Qty'],reqRows)}</div>`;
+
+  if(!lRows.length&&!dRowsBase.length&&!mRows.length&&!reqRows.length&&!(report.photos&&report.photos.length)){
+    html+=`<div style="font-size:11px;color:${C.fog};font-style:italic;padding:2px 0">No detailed work logged for this site today.</div>`;
+  }
+
+  // Photo grid — always the LAST element of a site's block, right before the
+  // divider that leads into the next site's DPR section.
+  if(report.photos&&report.photos.length){
+    html+=`<div style="margin-top:3px">${photoGridView(report.photos)}</div>`;
+  }
+
+  html+=`</div>`;
+  return html;
+}
+
+function buildPrintBody(date,items){
+  const co=state.company;
+  const sections=items.map(it=>printSiteSectionHTML(it.project,it.report))
+    .join(`<div style="height:1px;background:${C.border};margin:0 0 14px"></div>`);
+  const signature=`<div style="margin-top:4px;padding-top:14px;border-top:2px solid ${C.border};display:flex;justify-content:space-around;page-break-inside:avoid">
+    ${['Site Engineer','Client','Site Incharge'].map(role=>`<div style="text-align:center;flex:1"><div style="height:32px;border-bottom:1.5px solid ${C.slate};margin:0 16px 5px"></div><div style="font-size:10.5px;font-weight:700;color:${C.slate}">${role}</div></div>`).join('')}
+  </div>`;
+  return `<div style="font-family:-apple-system,'Segoe UI',Arial,sans-serif;color:${C.ink};max-width:900px;margin:0 auto">
+    ${printHeaderHTML(date,co)}
+    ${sections}
+    ${signature}
+    <div style="text-align:center;margin-top:12px;font-size:9.5px;color:${C.fog}">Generated by Site Reports App</div>
+  </div>`;
+}
+
+// Print via an isolated hidden <iframe> so ONLY this generated report is
+// ever sent to the printer — never the surrounding app/page content.
+function doPrint(bodyHtml){
+  if(printFrame){try{printFrame.remove();}catch(e){}printFrame=null;}
+  printFrame=document.createElement('iframe');
+  printFrame.setAttribute('aria-hidden','true');
+  printFrame.style.position='fixed';
+  printFrame.style.right='0';
+  printFrame.style.bottom='0';
+  printFrame.style.width='0';
+  printFrame.style.height='0';
+  printFrame.style.border='0';
+  document.body.appendChild(printFrame);
+
+  const fullHtml=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Daily Progress Report</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,'Segoe UI',Arial,sans-serif}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
+    body{padding:10px 8px;color:${C.ink};background:#fff}
+    table{width:100%;border-collapse:collapse}
+    img{display:block}
+    @page{margin:6mm 5mm}
+    @media print{
+      *{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
+    }
+  </style></head><body>${bodyHtml}</body></html>`;
+
+  const doc=printFrame.contentWindow.document;
+  doc.open();doc.write(fullHtml);doc.close();
+
+  let fired=false;
+  const fire=()=>{
+    if(fired)return;fired=true;
+    try{
+      printFrame.contentWindow.focus();
+      printFrame.contentWindow.print();
+    }catch(e){console.error('Print failed',e);}
+  };
+  try{
+    printFrame.contentWindow.onafterprint=()=>{ if(printFrame){printFrame.remove();printFrame=null;} };
+  }catch(e){}
+  printFrame.onload=fire;
+  setTimeout(fire,500); // fallback for browsers that don't fire onload reliably after doc.write
+}
+
+function printAllSites(){
+  if(state.projects.length===0){alert('No projects added yet. Add projects from Settings first.');return;}
+  const items=state.projects.map(p=>({project:p,report:state.reports.find(r=>r.projectId===p.id)||null}));
+  doPrint(buildPrintBody(state.date,items));
+}
+function printSingleSite(){
+  doPrint(buildPrintBody(state.date,[{project:state.activeProject,report:state.activeReport}]));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════
+function render(){
+  let html='';
+  if(state.view==='dashboard')      html=viewDashboard();
+  else if(state.view==='settings')  html=viewSettings();
+  else if(state.view==='form')      html=viewForm();
+  else if(state.view==='detail')    html=viewDetail();
+  if(state.confirm){
+    const c=state.confirm;
+    const disabled=c.countdown>0;
+    html+=`<div style="position:fixed;inset:0;background:rgba(30,20,88,.55);display:flex;align-items:center;justify-content:center;z-index:999;padding:20px">
+      <div style="background:${C.white};border-radius:20px;padding:28px 24px;max-width:300px;width:100%;box-shadow:0 20px 60px ${C.ink}40">
+        <div style="font-size:15px;font-weight:700;color:${C.ink};margin-bottom:8px">⚠️ Confirm Delete</div>
+        <div style="font-size:13px;color:${C.slate};margin-bottom:20px">${c.msg}</div>
+        <div style="display:flex;gap:10px">
+          <button id="confirmDeleteBtn" onclick="cfOk()" ${disabled?'disabled':''} style="flex:1;padding:11px;border-radius:10px;border:none;font-weight:700;font-size:13px;cursor:${disabled?'not-allowed':'pointer'};background:${disabled?'#9CA3AF':'linear-gradient(135deg,#DC2626,#EF4444)'};color:white">${disabled?`Wait ${c.countdown}s…`:'Delete'}</button>
+          <button onclick="cfNo()" style="flex:1;padding:11px;border-radius:10px;font-weight:700;font-size:13px;cursor:pointer;background:transparent;color:${C.navy};border:1.5px solid ${C.border}">Cancel</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  document.getElementById('app').innerHTML=html;
+  window.scrollTo(0,0);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACTIONS
+// ═══════════════════════════════════════════════════════════════
+function navDash(){state.view='dashboard';render();}
+function navSettings(){state.view='settings';state.settingsView='main';render();}
+function settingsBack(){state.settingsView='main';render();}
+
+async function loadReports(){
+  const[r,d]=await Promise.all([DB.reports.byDate(state.date),DB.reports.allDates()]);
+  state.reports=r;state.allDates=d;
+}
+function changeDate(v){state.date=v;loadReports().then(()=>render());}
+function gotoDate(d){state.date=d;loadReports().then(()=>render());}
+
+function addRpt(pid){
+  state.activeProject=state.projects.find(p=>p.id===pid);
+  state.activeReport=null;
+  formState={projectId:pid,date:state.date,weather:'Sunny',siteNote:'',
+    labour:[{id:uid(),...ROW_BLANKS.labour}],
+    deptWork:[{id:uid(),...ROW_BLANKS.deptWork}],
+    matBought:[{id:uid(),...ROW_BLANKS.matBought}],
+    matRequired:[{id:uid(),...ROW_BLANKS.matRequired}],
+    photos:[],
+  };
+  state.view='form';render();
+}
+function editRpt(pid,rid){
+  state.activeProject=state.projects.find(p=>p.id===pid);
+  state.activeReport=state.reports.find(r=>r.id===rid);
+  formState=JSON.parse(JSON.stringify(state.activeReport));
+  ['labour','deptWork','matBought','matRequired'].forEach(k=>{if(!formState[k]||!formState[k].length)formState[k]=[{id:uid(),...ROW_BLANKS[k]}];});
+  if(!formState.photos)formState.photos=[];
+  state.view='form';render();
+}
+function viewRpt(pid,rid){
+  state.activeProject=state.projects.find(p=>p.id===pid);
+  state.activeReport=state.reports.find(r=>r.id===rid);
+  state.view='detail';render();
+}
+async function saveRpt(){
+  await DB.reports.save({...formState});
+  await loadReports();state.view='dashboard';render();
+}
+
+function updRow(sec,rid,field,val){const row=(formState[sec]||[]).find(r=>r.id===rid);if(row)row[field]=val;}
+function addRow(sec){
+  formState[sec].push({id:uid(),...ROW_BLANKS[sec]});
+  const el=document.getElementById('rows_'+sec);if(el)el.innerHTML=buildRowsHTML(sec);
+}
+function rmRow(sec,rid){
+  formState[sec]=formState[sec].filter(r=>r.id!==rid);
+  const el=document.getElementById('rows_'+sec);if(el)el.innerHTML=buildRowsHTML(sec);
+}
+function setWeather(w){formState.weather=w;state.view='form';render();}
+
+function editCompany(){
+  state.companyForm={companyName:state.company.companyName||'',companyAddress:state.company.companyAddress||'',engineerName:state.company.engineerName||''};
+  state.settingsView='editCompany';render();
+}
+async function saveCompany(){
+  const cn=document.getElementById('inp_cname');
+  const ca=document.getElementById('inp_caddr');
+  const en=document.getElementById('inp_ename');
+  const companyName=(cn?cn.value:state.companyForm.companyName).trim();
+  const companyAddress=(ca?ca.value:state.companyForm.companyAddress).trim();
+  const engineerName=(en?en.value:state.companyForm.engineerName).trim();
+  if(!companyName){alert('Please enter a company name.');return;}
+  const obj={companyName,companyAddress,engineerName};
+  await DB.settings.save(obj);
+  state.company=obj;
+  state.settingsView='main';
+  render();
+}
+
+function addProject(){state.editingProject=null;state.projectForm={name:'',address:''};state.settingsView='editProject';render();}
+function editProject(id){
+  const p=state.projects.find(p=>p.id===id);
+  state.editingProject=p;state.projectForm={name:p.name,address:p.address||''};
+  state.settingsView='editProject';render();
+}
+async function saveProject(){
+  const pn=document.getElementById('inp_pname');
+  const pa=document.getElementById('inp_paddr');
+  const name=(pn?pn.value:state.projectForm.name).trim();
+  const address=(pa?pa.value:state.projectForm.address).trim();
+  if(!name){alert('Please enter a project name.');return;}
+  const ep=state.editingProject;
+  const record=ep&&ep.id?{id:ep.id,name,address}:{name,address};
+  await DB.projects.save(record);
+  state.projects=await DB.projects.all();
+  state.settingsView='main';render();
+}
+
+// ── Delete confirmation with mandatory 3-second wait ───────────
+function openConfirm(msg,k,v){
+  if(confirmTimer){clearInterval(confirmTimer);confirmTimer=null;}
+  state.confirm={msg,k,v,countdown:3};
+  render();
+  confirmTimer=setInterval(()=>{
+    if(!state.confirm){clearInterval(confirmTimer);confirmTimer=null;return;}
+    state.confirm.countdown--;
+    const btn=document.getElementById('confirmDeleteBtn');
+    if(state.confirm.countdown<=0){
+      clearInterval(confirmTimer);confirmTimer=null;
+      if(btn){
+        btn.disabled=false;btn.textContent='Delete';
+        btn.style.cursor='pointer';
+        btn.style.background='linear-gradient(135deg,#DC2626,#EF4444)';
+      }
+    }else if(btn){
+      btn.textContent=`Wait ${state.confirm.countdown}s…`;
+    }
+  },1000);
+}
+function delProject(id){openConfirm('Delete this project? Its saved reports will remain in storage but the project will no longer appear. This cannot be undone.','prj',id);}
+
+function cfOk(){
+  if(!state.confirm||state.confirm.countdown>0)return;
+  if(confirmTimer){clearInterval(confirmTimer);confirmTimer=null;}
+  const c=state.confirm;state.confirm=null;
+  if(c.k==='prj')DB.projects.del(c.v).then(async()=>{state.projects=await DB.projects.all();render();});
+}
+function cfNo(){
+  if(confirmTimer){clearInterval(confirmTimer);confirmTimer=null;}
+  state.confirm=null;render();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOOT
+// ═══════════════════════════════════════════════════════════════
+async function boot(){
+  try{
+    const[co,prj,rpts,dates]=await Promise.all([
+      DB.settings.get(),DB.projects.all(),DB.reports.byDate(todayStr()),DB.reports.allDates(),
+    ]);
+    state.company=co?{companyName:co.companyName||'',companyAddress:co.companyAddress||'',engineerName:co.engineerName||''}:{companyName:'',companyAddress:'',engineerName:''};
+    state.projects=prj||[];
+    state.reports=rpts||[];
+    state.allDates=dates||[];
+  }catch(e){console.error('Boot error:',e);}
+  render();
+}
+boot();
+</script>
+</body>
+</html>
