@@ -44,7 +44,7 @@ button{cursor:pointer;border:none}
 // ── IndexedDB ────────────────────────────────────────────────
 function openDB(){
   return new Promise((res,rej)=>{
-    const r=indexedDB.open('SiteReportsPWA2',1);
+    const r=indexedDB.open('SiteReportsPWA2',2);
     r.onupgradeneeded=e=>{
       const db=e.target.result;
       if(!db.objectStoreNames.contains('settings'))
@@ -55,6 +55,10 @@ function openDB(){
         const s=db.createObjectStore('reports',{keyPath:'id',autoIncrement:true});
         s.createIndex('date','date');
         s.createIndex('projectDate',['projectId','date'],{unique:true});
+      }
+      if(!db.objectStoreNames.contains('contacts')){
+        const cs=db.createObjectStore('contacts',{keyPath:'id',autoIncrement:true});
+        cs.createIndex('projectId','projectId');
       }
     };
     r.onsuccess=()=>res(r.result);
@@ -96,7 +100,10 @@ const DB={
       return new Promise((res,rej)=>{
         const t=db.transaction('reports','readwrite');
         const req=r.id?t.objectStore('reports').put(r):t.objectStore('reports').add(r);
-        req.onsuccess=()=>res(req.result);req.onerror=()=>rej(req.error);
+        req.onerror=()=>rej(req.error);
+        t.oncomplete=()=>res(req.result);
+        t.onerror=()=>rej(t.error);
+        t.onabort=()=>rej(t.error||new Error('Transaction aborted'));
       });
     },
     del:id=>txOp('reports','readwrite',s=>s.delete(id)),
@@ -108,6 +115,28 @@ const DB={
         r.onerror=()=>rej(r.error);
       });
     }
+  },
+  contacts:{
+    all:()=>txOp('contacts','readonly',s=>s.getAll()),
+    byProject:async pid=>{
+      const db=await openDB();
+      return new Promise((res,rej)=>{
+        const r=db.transaction('contacts','readonly').objectStore('contacts').index('projectId').getAll(pid);
+        r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);
+      });
+    },
+    save:async c=>{
+      const db=await openDB();
+      return new Promise((res,rej)=>{
+        const t=db.transaction('contacts','readwrite');
+        const req=c.id?t.objectStore('contacts').put(c):t.objectStore('contacts').add(c);
+        req.onerror=()=>rej(req.error);
+        t.oncomplete=()=>res(req.result);
+        t.onerror=()=>rej(t.error);
+        t.onabort=()=>rej(t.error||new Error('Aborted'));
+      });
+    },
+    del:id=>txOp('contacts','readwrite',s=>s.delete(id)),
   }
 };
 
@@ -144,6 +173,10 @@ const state={
   editingProject:null,
   projectForm:{name:'',address:''},
   companyForm:{companyName:'',companyAddress:'',engineerName:'',signature:''},
+  contacts:[],
+  contactsView:'list',
+  editingContact:null,
+  contactForm:{projectId:null,name:'',role:'',phone:''},
 };
 let formState=null;
 let confirmTimer=null;
@@ -164,6 +197,8 @@ const IC={
   map:`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`,
   lock:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
   camera:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`,
+  phone:`<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12a19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 3.61 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6a16 16 0 0 0 6 6l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21.73 16z"/></svg>`,
+  contacts:`<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
 };
 
 // ── HTML Blocks ──────────────────────────────────────────────
@@ -269,7 +304,7 @@ function buildPhotoGridEditableHTML(){
 function photoSection(){
   const n=(formState.photos||[]).length;
   const full=n>=MAX_PHOTOS;
-  return `<div style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">
+  return `<div id="photoSec" style="background:${C.white};border-radius:16px;padding:16px;margin-bottom:12px;box-shadow:0 1px 8px ${C.ink}07">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
       <span style="font-size:14px">📸</span>
       <span style="font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.9px;color:${C.navy};flex:1">Site Photos</span>
@@ -304,6 +339,7 @@ function dashboardHeader(){
         <div style="color:rgba(255,255,255,.6);font-size:9.5px;font-weight:800;margin-top:3px;letter-spacing:.7px">${fmtDay(date).toUpperCase()}</div>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:6px">
+        ${ibtn(IC.contacts,"navContacts()",undefined,undefined,'Site Contacts')}
         ${ibtn(IC.print,"printAllSites()",undefined,undefined,'Print Daily Progress Report')}
         ${ibtn(IC.gear,"navSettings()",undefined,undefined,'Settings')}
       </div>
@@ -611,12 +647,101 @@ async function onPhotoInputChange(input){
     }catch(e){console.error('Photo processing failed',e);}
   }
   input.value='';
-  // Re-render just the photo section so the rest of the form (typed text) isn't disturbed
-  state.view='form';render();
+  // Swap only the photo section — avoids destroying typed input values in the rest of the form
+  const sec=document.getElementById('photoSec');
+  if(sec){sec.outerHTML=photoSection();}else{state.view='form';render();}
 }
 function removePhoto(id){
   formState.photos=(formState.photos||[]).filter(p=>p.id!==id);
-  state.view='form';render();
+  const sec=document.getElementById('photoSec');
+  if(sec){sec.outerHTML=photoSection();}else{state.view='form';render();}
+}
+
+// ── Site Contacts ─────────────────────────────────────────────
+function viewContacts(){
+  const{projects,contacts,contactsView,contactForm,editingContact}=state;
+
+  if(contactsView==='addEdit'){
+    const pid=contactForm.projectId;
+    const proj=projects.find(p=>p.id===pid)||{};
+    const isEdit=!!(editingContact&&editingContact.id);
+    const iStyle=`width:100%;padding:10px 12px;border-radius:10px;border:1.5px solid ${C.border};font-size:14px;background:${C.snow};color:${C.ink};box-sizing:border-box`;
+    return appBar(isEdit?'Edit Contact':'Add Contact',esc(proj.name||''),ibtn(IC.back,'contactsBack()'),'')+
+    `<div style="padding:8px">
+      <div style="background:${C.white};border-radius:16px;overflow:hidden;box-shadow:0 2px 12px ${C.ink}0A;border:1px solid ${C.border}">
+        <div style="background:linear-gradient(135deg,${C.ink},${C.navy});padding:10px 16px;display:flex;align-items:center;gap:9px">
+          <span style="color:white;font-size:18px">${IC.contacts}</span>
+          <span style="color:white;font-weight:800;font-size:15px">${isEdit?'Edit Contact':'New Contact'}</span>
+        </div>
+        <div style="padding:16px">
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Full Name *</label>
+            <input id="cf_name" value="${esc(contactForm.name)}" placeholder="e.g. Ramesh Kumar" oninput="state.contactForm.name=this.value" style="${iStyle}">
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Role / Designation</label>
+            <input id="cf_role" value="${esc(contactForm.role)}" placeholder="e.g. Site Engineer, Contractor, Owner" oninput="state.contactForm.role=this.value" style="${iStyle}">
+          </div>
+          <div style="margin-bottom:20px">
+            <label style="display:block;font-size:10px;font-weight:700;color:${C.fog};text-transform:uppercase;letter-spacing:.6px;margin-bottom:5px">Phone Number *</label>
+            <input id="cf_phone" type="tel" value="${esc(contactForm.phone)}" placeholder="e.g. 9876543210" oninput="state.contactForm.phone=this.value" style="${iStyle}">
+          </div>
+          <div style="display:flex;gap:10px">
+            <button onclick="saveContact()" style="flex:1;display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:12px;border-radius:12px;border:none;font-weight:700;font-size:14px;cursor:pointer;background:linear-gradient(135deg,${C.navy},${C.royal});color:white;box-shadow:0 2px 10px ${C.navy}40">${IC.check} Save Contact</button>
+            <button onclick="contactsBack()" style="padding:12px 18px;border-radius:12px;font-weight:700;font-size:13px;cursor:pointer;background:transparent;color:${C.navy};border:1.5px solid ${C.border}">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── Contacts List ──
+  const totalContacts=contacts.length;
+  const siteSections=projects.length===0
+    ?`<div style="text-align:center;padding:48px 20px"><div style="font-size:40px;margin-bottom:12px">📋</div><div style="font-size:16px;font-weight:800;color:${C.ink};margin-bottom:6px">No Projects Yet</div><div style="font-size:13px;color:${C.fog}">Add projects in Settings first</div></div>`
+    :projects.map(p=>{
+      const pContacts=contacts.filter(c=>c.projectId===p.id);
+      const reportCount=state.reports.filter(r=>r.projectId===p.id).length;
+      return `
+      <div style="background:${C.white};border-radius:16px;overflow:hidden;margin-bottom:14px;box-shadow:0 2px 16px ${C.ink}0E;border:1px solid ${C.border}">
+        <div style="background:linear-gradient(135deg,${C.ink} 0%,${C.navy} 55%,${C.royal} 100%);padding:9px 14px;display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;gap:9px;align-items:center;flex:1;min-width:0">
+            ${avatar(p.name,36)}
+            <div style="min-width:0;line-height:1.3">
+              <div style="color:white;font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
+              ${p.address?`<div style="color:rgba(255,255,255,.65);font-size:10.5px">${esc(p.address)}</div>`:''}
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:8px">
+            <div style="text-align:right">
+              <div style="color:rgba(255,255,255,.5);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px">Reports</div>
+              <div style="color:white;font-size:13px;font-weight:800">${state.allDates.length>0?state.allDates.length:reportCount}</div>
+            </div>
+            <button onclick="addContact(${p.id})" style="display:inline-flex;align-items:center;gap:4px;padding:6px 10px;border-radius:8px;border:none;background:rgba(255,255,255,.18);color:white;font-size:11px;font-weight:700;cursor:pointer">${IC.plus} Add</button>
+          </div>
+        </div>
+        ${pContacts.length===0
+          ?`<div style="padding:16px 14px;text-align:center;color:${C.fog};font-size:12.5px">No contacts added yet — tap Add</div>`
+          :`<div style="padding:0 14px">
+            ${pContacts.map((c,i)=>`
+              <div style="display:flex;align-items:center;gap:12px;padding:11px 0;${i<pContacts.length-1?`border-bottom:1px solid ${C.border}`:''}">
+                <div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,${C.navy},${C.royal});display:flex;align-items:center;justify-content:center;color:white;font-weight:800;font-size:15px;flex-shrink:0">${(c.name||'?')[0].toUpperCase()}</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13.5px;font-weight:700;color:${C.ink}">${esc(c.name)}</div>
+                  ${c.role?`<div style="font-size:11px;color:${C.fog};margin-top:1px">${esc(c.role)}</div>`:''}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                  ${c.phone?`<a href="tel:${esc(c.phone)}" style="display:inline-flex;align-items:center;gap:5px;padding:7px 12px;border-radius:20px;background:linear-gradient(135deg,#059669,#10B981);color:white;text-decoration:none;font-size:12px;font-weight:700;box-shadow:0 2px 8px #05966940">${IC.phone} ${esc(c.phone)}</a>`:''}
+                  <button onclick="editContact(${c.id})" style="padding:7px;border-radius:9px;border:none;background:${C.cloud};cursor:pointer;color:${C.navy};display:flex">${IC.edit}</button>
+                  <button onclick="delContact(${c.id})" style="padding:7px;border-radius:9px;border:none;background:${C.rose}15;cursor:pointer;color:${C.rose};display:flex">${IC.trash}</button>
+                </div>
+              </div>`).join('')}
+          </div>`}
+      </div>`;
+    }).join('');
+
+  return appBar('Site Contacts',`${totalContacts} contact${totalContacts===1?'':'s'} across ${projects.length} site${projects.length===1?'':'s'}`,ibtn(IC.back,'navDash()'),'')+
+    `<div style="padding:8px;padding-bottom:24px">${siteSections}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -702,7 +827,7 @@ function buildPrintBody(date,items){
   const co=state.company;
   const sections=items.map(it=>printSiteSectionHTML(it.project,it.report))
     .join(`<div style="height:1px;background:${C.border};margin:0 0 14px"></div>`);
-  const signature=`<div style="margin-top:16px;page-break-inside:avoid">
+  const signature=`<div style="margin-top:16px;page-break-inside:avoid;display:flex;flex-direction:column;align-items:flex-end">
     ${co.signature?`<img src="${co.signature}" style="height:46px;display:block;margin-bottom:3px">`:''}
     <div style="font-size:11px;font-weight:700;color:${C.slate}">Site Engineer</div>
   </div>`;
@@ -744,6 +869,7 @@ function render(){
   else if(state.view==='settings')  html=viewSettings();
   else if(state.view==='form')      html=viewForm();
   else if(state.view==='detail')    html=viewDetail();
+  else if(state.view==='contacts')  html=viewContacts();
   if(state.confirm){
     const c=state.confirm;
     const disabled=c.countdown>0;
@@ -771,6 +897,38 @@ function render(){
 function navDash(){state.view='dashboard';render();}
 function navSettings(){state.view='settings';state.settingsView='main';render();}
 function settingsBack(){state.settingsView='main';render();}
+async function navContacts(){
+  state.contacts=await DB.contacts.all();
+  state.contactsView='list';state.view='contacts';render();
+}
+function contactsBack(){state.contactsView='list';state.editingContact=null;render();}
+function addContact(pid){
+  state.contactForm={projectId:pid,name:'',role:'',phone:''};
+  state.editingContact=null;state.contactsView='addEdit';render();
+}
+function editContact(cid){
+  const c=state.contacts.find(x=>x.id===cid);if(!c)return;
+  state.editingContact=c;
+  state.contactForm={projectId:c.projectId,name:c.name||'',role:c.role||'',phone:c.phone||''};
+  state.contactsView='addEdit';render();
+}
+async function saveContact(){
+  const f=state.contactForm;
+  const n=document.getElementById('cf_name');
+  const ro=document.getElementById('cf_role');
+  const ph=document.getElementById('cf_phone');
+  if(n)f.name=n.value;if(ro)f.role=ro.value;if(ph)f.phone=ph.value;
+  if(!f.name.trim()){alert('Please enter a contact name.');return;}
+  if(!f.phone.trim()){alert('Please enter a phone number.');return;}
+  const rec={projectId:f.projectId,name:f.name.trim(),role:f.role.trim(),phone:f.phone.trim()};
+  if(state.editingContact&&state.editingContact.id)rec.id=state.editingContact.id;
+  await DB.contacts.save(rec);
+  state.contacts=await DB.contacts.all();
+  state.contactsView='list';state.editingContact=null;render();
+}
+function delContact(cid){
+  openConfirm('Delete this contact? This cannot be undone.','contact',cid);
+}
 
 async function loadReports(){
   const[r,d]=await Promise.all([DB.reports.byDate(state.date),DB.reports.allDates()]);
@@ -934,6 +1092,7 @@ function cfOk(){
   if(confirmTimer){clearInterval(confirmTimer);confirmTimer=null;}
   const c=state.confirm;state.confirm=null;
   if(c.k==='prj')DB.projects.del(c.v).then(async()=>{state.projects=await DB.projects.all();render();});
+  if(c.k==='contact')DB.contacts.del(c.v).then(async()=>{state.contacts=await DB.contacts.all();render();});
 }
 function cfNo(){
   if(confirmTimer){clearInterval(confirmTimer);confirmTimer=null;}
@@ -945,13 +1104,14 @@ function cfNo(){
 // ═══════════════════════════════════════════════════════════════
 async function boot(){
   try{
-    const[co,prj,rpts,dates]=await Promise.all([
-      DB.settings.get(),DB.projects.all(),DB.reports.byDate(todayStr()),DB.reports.allDates(),
+    const[co,prj,rpts,dates,ctcts]=await Promise.all([
+      DB.settings.get(),DB.projects.all(),DB.reports.byDate(todayStr()),DB.reports.allDates(),DB.contacts.all(),
     ]);
     state.company=co?{companyName:co.companyName||'',companyAddress:co.companyAddress||'',engineerName:co.engineerName||'',signature:co.signature||''}:{companyName:'',companyAddress:'',engineerName:'',signature:''};
     state.projects=prj||[];
     state.reports=rpts||[];
     state.allDates=dates||[];
+    state.contacts=ctcts||[];
   }catch(e){console.error('Boot error:',e);}
   render();
 }
